@@ -45,7 +45,7 @@ if __name__ == '__main__':
         pickle.dump(y, f)
 
     # --- MLflow tracking ---
-    mlflow.set_tracking_uri("./mlruns")
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     dataset_name = "Drug Shortage Synthetic Dataset"   # modified
     current_time = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
     experiment_id = mlflow.create_experiment(f"{dataset_name}_{current_time}")
