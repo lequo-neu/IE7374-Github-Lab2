@@ -2,4 +2,6 @@ lab_env/
 __pycache__/
 *.pyc
 mlruns/
-.DS_Store
+.DS_Storemlflow.db
+timestamp.txt
+data/
