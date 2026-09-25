@@ -1,0 +1,63 @@
+name: Periodic Model Calibration
+
+on:
+  schedule:
+    - cron: '0 0 * * *'    # run 00:00 UTC everyday
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and Store Timestamp
+        run: |
+          timestamp=$(date '+%Y%m%d%H%M%S')
+          echo "$timestamp" > timestamp.txt
+
+      - name: Set File Permissions
+        run: chmod +x ./src/train_model.py
+
+      - name: Train Model
+        run: |
+          timestamp=$(cat timestamp.txt)
+          python ./src/train_model.py --timestamp "$timestamp"
+
+      - name: Evaluate Model and Save Metrics
+        run: |
+          timestamp=$(cat timestamp.txt)
+          python ./src/evaluate_model.py --timestamp "$timestamp"
+          metrics_filename="${timestamp}_metrics.json"
+          mv "$metrics_filename" "$GITHUB_WORKSPACE/metrics/$metrics_filename"
+
+      - name: Move Model to models/
+        run: |
+          timestamp=$(cat timestamp.txt)
+          model_filename="model_${timestamp}_dt_model.joblib"
+          mv "$model_filename" "$GITHUB_WORKSPACE/models/$model_filename"
+
+      - name: Commit and Push model + metrics
+        run: |
+          timestamp=$(cat timestamp.txt)
+          metrics_filename="${timestamp}_metrics.json"
+          model_filename="model_${timestamp}_dt_model.joblib"
+          git config --global user.email "lequo-neu@users.noreply.github.com"
+          git config --global user.name "lequo-neu"
+          git add "metrics/$metrics_filename" "models/$model_filename"
+          git commit -m "Auto: scheduled calibration $timestamp"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
