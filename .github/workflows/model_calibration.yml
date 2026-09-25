@@ -3,6 +3,7 @@ name: Periodic Model Calibration
 on:
   schedule:
     - cron: '0 0 * * *'    # run 00:00 UTC everyday
+  workflow_dispatch:
 
 jobs:
   retrain:
