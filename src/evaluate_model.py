@@ -1,9 +1,13 @@
 # src/evaluate_model.py
-import pickle, os, json, random
-from sklearn.metrics import f1_score
-import joblib, sys
+import os
+import sys
+import json
+import pickle
 import argparse
-from sklearn.datasets import make_classification
+
+import joblib
+from sklearn.metrics import f1_score
+from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.abspath('..'))
 
@@ -14,24 +18,24 @@ if __name__ == '__main__':
     args = parser.parse_args()
     timestamp = args.timestamp
 
+    # Load the same data that was used during training
+    with open('data/data.pickle', 'rb') as f:
+        X = pickle.load(f)
+    with open('data/target.pickle', 'rb') as f:
+        y = pickle.load(f)
+
+    # Hold out 20% as a consistent test split
+    _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
     # Load model
     model_version = f'model_{timestamp}_dt_model'
     model = joblib.load(f'{model_version}.joblib')
 
-    # Generate evaluation data
-    X, y = make_classification(
-        n_samples=random.randint(500, 2000),
-        n_features=8,
-        n_informative=5,
-        n_redundant=0,
-        n_repeated=0,
-        n_classes=2,
-        random_state=42,
-        shuffle=True,
-    )
+    # Evaluate on held-out test split
+    y_pred = model.predict(X_test)
+    metrics = {"F1_Score": f1_score(y_test, y_pred, average='weighted')}
 
-    y_pred = model.predict(X)
-    metrics = {"F1_Score": f1_score(y, y_pred)}
+    print(f"F1 Score on test split: {metrics['F1_Score']:.4f}")
 
     # Save metrics
     os.makedirs('metrics', exist_ok=True)
