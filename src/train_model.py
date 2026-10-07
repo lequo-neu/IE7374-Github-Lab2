@@ -1,20 +1,37 @@
 # src/train_model.py
-# IE7374 Lab 2 — Modified from original train_model.py
-# Changes:
-#   - Model: RandomForestClassifier → GradientBoostingClassifier
-#   - Dataset name: "Reuters Corpus Volume" → "Drug Shortage Synthetic Dataset"
-#   - n_samples: randint(0, 2000) → randint(500, 2000)  [fix: tránh 0 samples]
-#   - n_features: 6 → 8, n_informative: 3 → 5
-#   - Added: log learning_rate and n_estimators as MLflow params
+# IE7374 Lab 2 — Advanced: Hyperparameter Sweep
+# Changes from original:
+#   - Model: RandomForestClassifier -> GradientBoostingClassifier
+#   - Dataset: fixed n_samples=1000, n_features=8, n_informative=5
+#   - Hyperparameter sweep: 6 configs compared on validation F1
+#   - Best config selected automatically; final model trained on full dataset
+#   - All sweep runs logged to MLflow for comparison
 
-import mlflow, datetime, os, pickle, random
+import argparse
+import datetime
+import os
+import pickle
+import sys
+
+import mlflow
 from joblib import dump
 from sklearn.datasets import make_classification
-from sklearn.metrics import accuracy_score, f1_score
 from sklearn.ensemble import GradientBoostingClassifier
-import argparse, sys
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.abspath('..'))
+
+SWEEP_CONFIGS = [
+    {"n_estimators": 50,  "learning_rate": 0.10},
+    {"n_estimators": 100, "learning_rate": 0.10},
+    {"n_estimators": 200, "learning_rate": 0.10},
+    {"n_estimators": 50,  "learning_rate": 0.05},
+    {"n_estimators": 100, "learning_rate": 0.05},
+    {"n_estimators": 200, "learning_rate": 0.05},
+]
+
+DATASET_NAME = "Drug Shortage Synthetic Dataset"
 
 if __name__ == '__main__':
 
@@ -23,13 +40,12 @@ if __name__ == '__main__':
                         help="Timestamp from GitHub Actions")
     args = parser.parse_args()
     timestamp = args.timestamp
-    print(f"Timestamp received: {timestamp}")
+    print(f"Timestamp: {timestamp}")
 
-    # --- Dataset (modified) ---
     X, y = make_classification(
-        n_samples=random.randint(500, 2000),   # fix: was randint(0, 2000)
-        n_features=8,                           # modified: was 6
-        n_informative=5,                        # modified: was 3
+        n_samples=1000,
+        n_features=8,
+        n_informative=5,
         n_redundant=0,
         n_repeated=0,
         n_classes=2,
@@ -37,48 +53,103 @@ if __name__ == '__main__':
         shuffle=True,
     )
 
-    # Save data
     os.makedirs('data', exist_ok=True)
     with open('data/data.pickle', 'wb') as f:
         pickle.dump(X, f)
     with open('data/target.pickle', 'wb') as f:
         pickle.dump(y, f)
 
-    # --- MLflow tracking ---
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    dataset_name = "Drug Shortage Synthetic Dataset"   # modified
     current_time = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    experiment_id = mlflow.create_experiment(f"{dataset_name}_{current_time}")
+    experiment_id = mlflow.create_experiment(f"{DATASET_NAME}_sweep_{current_time}")
 
-    with mlflow.start_run(experiment_id=experiment_id, run_name=dataset_name):
+    print(f"\n{'=' * 60}")
+    print(f"Hyperparameter Sweep — {len(SWEEP_CONFIGS)} configurations")
+    print(f"Train: {len(X_train)} samples | Validation: {len(X_val)} samples")
+    print(f"{'=' * 60}")
 
-        # Modified model: GradientBoostingClassifier
-        n_estimators = 100
-        learning_rate = 0.1
+    best_f1 = -1.0
+    best_config = None
+    sweep_results = []
 
+    for i, config in enumerate(SWEEP_CONFIGS, start=1):
+        with mlflow.start_run(experiment_id=experiment_id,
+                              run_name=f"sweep_config_{i}"):
+            mlflow.log_params({
+                "dataset_name": DATASET_NAME,
+                "n_samples":    X.shape[0],
+                "n_features":   X.shape[1],
+                **config,
+            })
+
+            model = GradientBoostingClassifier(
+                n_estimators=config["n_estimators"],
+                learning_rate=config["learning_rate"],
+                random_state=42,
+            )
+            model.fit(X_train, y_train)
+
+            y_pred_val = model.predict(X_val)
+            val_f1 = f1_score(y_val, y_pred_val, average="weighted")
+            mlflow.log_metric("val_f1", val_f1)
+
+            is_best = val_f1 > best_f1
+            if is_best:
+                best_f1 = val_f1
+                best_config = config
+
+            sweep_results.append((config, val_f1))
+            marker = " <-- best so far" if is_best else ""
+            print(
+                f"  Config {i}: "
+                f"n_estimators={config['n_estimators']:>3}  "
+                f"learning_rate={config['learning_rate']:.2f}  "
+                f"| val F1: {val_f1:.4f}{marker}"
+            )
+
+    print(f"{'=' * 60}")
+    print(
+        f"  Best config: "
+        f"n_estimators={best_config['n_estimators']}, "
+        f"learning_rate={best_config['learning_rate']}  "
+        f"(val F1: {best_f1:.4f})"
+    )
+    print(f"{'=' * 60}\n")
+
+    with mlflow.start_run(experiment_id=experiment_id, run_name="final_model"):
         mlflow.log_params({
-            "dataset_name":      dataset_name,
-            "n_samples":         X.shape[0],
-            "n_features":        X.shape[1],
-            "n_estimators":      n_estimators,    # added
-            "learning_rate":     learning_rate,   # added
+            "dataset_name":        DATASET_NAME,
+            "n_samples":           X.shape[0],
+            "n_features":          X.shape[1],
+            "selected_by":         "sweep_best_val_f1",
+            "sweep_best_val_f1":   best_f1,
+            **best_config,
         })
 
-        model = GradientBoostingClassifier(
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            random_state=42
+        final_model = GradientBoostingClassifier(
+            n_estimators=best_config["n_estimators"],
+            learning_rate=best_config["learning_rate"],
+            random_state=42,
         )
-        model.fit(X, y)
-        y_pred = model.predict(X)
+        final_model.fit(X, y)
 
+        train_f1 = f1_score(y, final_model.predict(X), average="weighted")
+        train_acc = accuracy_score(y, final_model.predict(X))
         mlflow.log_metrics({
-            'Accuracy': accuracy_score(y, y_pred),
-            'F1 Score': f1_score(y, y_pred),
+            "train_f1":      train_f1,
+            "train_acc":     train_acc,
+            "sweep_val_f1":  best_f1,
         })
 
-    # Save model with timestamp-based versioning
     os.makedirs('models', exist_ok=True)
     model_filename = f'model_{timestamp}_dt_model.joblib'
-    dump(model, model_filename)
-    print(f"Model saved: {model_filename}")
+    dump(final_model, model_filename)
+    print(f"Final model saved: {model_filename}")
+    print(
+        f"Config: n_estimators={best_config['n_estimators']}, "
+        f"learning_rate={best_config['learning_rate']}"
+    )
