@@ -2,7 +2,7 @@ name: Periodic Model Calibration
 
 on:
   schedule:
-    - cron: '0 0 * * *'    # run 00:00 UTC everyday
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
@@ -28,6 +28,7 @@ jobs:
         run: |
           timestamp=$(date '+%Y%m%d%H%M%S')
           echo "$timestamp" > timestamp.txt
+          echo "Timestamp: $timestamp"
 
       - name: Set File Permissions
         run: chmod +x ./src/train_model.py
@@ -49,6 +50,23 @@ jobs:
           timestamp=$(cat timestamp.txt)
           model_filename="model_${timestamp}_dt_model.joblib"
           mv "$model_filename" "$GITHUB_WORKSPACE/models/$model_filename"
+
+      - name: Validate Model Quality
+        run: |
+          timestamp=$(cat timestamp.txt)
+          python - <<EOF
+          import json, sys
+          metrics_path = f"metrics/{open('timestamp.txt').read().strip()}_metrics.json"
+          with open(metrics_path) as f:
+              data = json.load(f)
+          f1 = data["F1_Score"]
+          threshold = 0.70
+          print(f"F1 Score: {f1:.4f} | Threshold: {threshold}")
+          if f1 < threshold:
+              print(f"Model rejected: F1 {f1:.4f} is below threshold {threshold}. Skipping commit.")
+              sys.exit(1)
+          print(f"Model accepted: F1 {f1:.4f} meets the quality threshold.")
+          EOF
 
       - name: Commit and Push model + metrics
         run: |
